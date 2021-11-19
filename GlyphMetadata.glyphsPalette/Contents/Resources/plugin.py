@@ -9,7 +9,18 @@ import time
 from AppKit import NSView, NSForegroundColorAttributeName, NSColor, NSAttributedString
 
 OUR_KEY = "uk.co.corvelsoftware.GlyphMetadata"
-SCHEMACHANGED = OUR_KEY + ".schemachanged"
+
+# This is fake for testing purposes but when the schema editor works reliably
+# we will just use the value in the font
+plist_schema = {
+    "Status": {"type": "Dropdown", "options": ["Draft", "Test", "In Review", "Final"]},
+    "Consultant checked": {"type": "Checkbox"},
+    "Consultant feedback": {"type": "Textbox"},
+    "Feedback integrated": {"type": "Checkbox"},
+    "Conjunct form": {"type": "Glyphbox"},
+    "Width": {"type": "Dropdown", "options": ["Other", "Single Bowl", "Double Bowl"]},
+}
+
 
 
 def grey(s):
@@ -24,7 +35,7 @@ def system_image_button(image_name, tooltip, callback):
     widget.getNSButton().setToolTip_(tooltip)
     return widget
 
-
+# Just using this for testing to stop the Vanilla crash issue. :-/
 def remove_callbacks(obj):
     if hasattr(obj, "_target"):
         obj._target = vanilla.vanillaBase.VanillaCallbackWrapper(None)
@@ -35,6 +46,7 @@ def remove_callbacks(obj):
             print("Removing callback on %s" % obj)
             remove_callbacks(obj)
 
+# Different kinds of metadata widget you can use
 
 class Widget:
     def refresh(self, other):
@@ -140,6 +152,8 @@ class Textbox(Widget):
         return vanilla.EditText("auto", callback=other.callback)
 
 
+# The window that pops up when you press Edit Schema
+
 class SchemaEditor:
     def __init__(self, font, schema, other):
         self.font = font
@@ -148,7 +162,6 @@ class SchemaEditor:
         self.window = vanilla.FloatingWindow(
             (500, 500),
             title="Metadata Schema Editor",
-            closable=True,  # Or else it crashes :-(
         )
         self.rebuild_schema_grid()
 
@@ -250,16 +263,7 @@ class SchemaEditor:
         }
         self.other.schemaChanged()
 
-
-plist_schema = {
-    "Status": {"type": "Dropdown", "options": ["Draft", "Test", "In Review", "Final"]},
-    "Consultant checked": {"type": "Checkbox"},
-    "Consultant feedback": {"type": "Textbox"},
-    "Feedback integrated": {"type": "Checkbox"},
-    "Conjunct form": {"type": "Glyphbox"},
-    "Width": {"type": "Dropdown", "options": ["Other", "Single Bowl", "Double Bowl"]},
-}
-
+# The actual palette!
 
 class GlyphMetadataPalette(PalettePlugin):
     @objc.python_method
@@ -272,12 +276,11 @@ class GlyphMetadataPalette(PalettePlugin):
             self.margin = 5
             self.font = None
             self.schema = {}
-            self.buildSchemaFromPlist(plist_schema)
-
-            print(self.schema.keys())
-            self.height = 52 + 20 * (1 + len(self.schema.keys()))
             if Glyphs.font:
                 self.font = Glyphs.font
+            # XXX check in Glyphs.font.userData[OUR_KEY] instead
+            self.buildSchemaFromPlist(plist_schema)
+            self.height = 52 + 20 * (1 + len(self.schema.keys()))
             self.paletteView = vanilla.Window(
                 (self.width, self.height),
                 minSize=(self.width, self.height - 10),
@@ -343,8 +346,6 @@ class GlyphMetadataPalette(PalettePlugin):
     def callback(self, sender=None):
         self.saveGlyphMetadata()
         self.makeClasses()
-        # Sort out any groups
-        pass
 
     @objc.python_method
     def gotoGlyph(self, sender=None):
@@ -407,22 +408,14 @@ class GlyphMetadataPalette(PalettePlugin):
 
     @objc.python_method
     def schemaChanged(self, sender=None):
-        pass
-        # Message("Foo", "Oh, the schema changed")
+        self.buildInterfaceFromSchema()
+        if self.selectedGlyph:
+            self.loadGlyphMetadata()
 
     @objc.python_method
     def start(self):
-
         # Adding a callback for the 'GSUpdateInterface' event
         Glyphs.addCallback(self.update, UPDATEINTERFACE)
-        callee = GlyphsApp.callbackHelperClass(self.schemaChanged, None)
-        selector = objc.selector(callee.callback_, signature=b"v@:@")
-        NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
-            callee, selector, SCHEMACHANGED, objc.nil
-        )
-        NSNotificationCenter.defaultCenter().postNotificationName_object_(
-            SCHEMACHANGED, None
-        )
 
     @objc.python_method
     def __del__(self):
@@ -511,7 +504,6 @@ class GlyphMetadataPalette(PalettePlugin):
         except Exception as e:
             self.logError(traceback.format_exc())
 
-    # interface -> source
     @objc.python_method
     def openSchemaEditor(self, sender=None):
         if self.font:
