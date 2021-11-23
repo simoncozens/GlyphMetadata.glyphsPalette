@@ -152,117 +152,6 @@ class Textbox(Widget):
         return vanilla.EditText("auto", callback=other.callback)
 
 
-# The window that pops up when you press Edit Schema
-
-class SchemaEditor:
-    def __init__(self, font, schema, other):
-        self.font = font
-        self.schema = schema
-        self.other = other
-        self.window = vanilla.FloatingWindow(
-            (500, 500),
-            title="Metadata Schema Editor",
-        )
-        self.rebuild_schema_grid()
-
-        self.window.add_row = vanilla.Button(
-            (0, -20, 100, 20), "Add Row", callback=self.add_row
-        )
-        self.window.save = vanilla.Button(
-            (120, -20, 100, 20), "Save", callback=self.save
-        )
-
-    def rebuild_schema_grid(self):
-        if hasattr(self.window, "schema_grid"):
-            del self.window.schema_grid
-        self.grid_contents = []
-        self.grid_contents.append(
-            [
-                vanilla.TextBox("auto", "Name"),
-                vanilla.TextBox("auto", "Widget Type"),
-                vanilla.TextBox("auto", ""),
-                vanilla.TextBox("auto", "Remove"),
-            ]
-        )
-        for title, widget in self.schema.items():
-            title_box = vanilla.EditText(
-                "auto", title, callback=self.rename, continuous=False
-            )
-            title_box.old_title = title
-            options = ["Dropdown", "Glyphbox", "Checkbox", "Textbox"]
-            type_box = vanilla.PopUpButton("auto", options, callback=self.change_type)
-            type_box.title = title
-            type_box.setItem(widget.__class__.__name__)
-            if isinstance(widget, Dropdown):
-                edit_options_box = system_image_button(
-                    "NSActionTemplate", "Edit Options", self.edit_options
-                )
-                edit_options_box.title = title
-            else:
-                edit_options_box = vanilla.TextBox("auto", "")
-            remove_box = system_image_button(
-                "NSRemoveTemplate", "Remove this row", self.remove_row
-            )
-            remove_box.title = title
-
-            self.grid_contents.append(
-                [title_box, type_box, edit_options_box, remove_box]
-            )
-        self.window.schema_grid = vanilla.GridView(
-            (0, 0, -0, -20),
-            self.grid_contents,
-            columnPadding=(5, 5),
-            columnSpacing=10,
-            rowPadding=(2, 2),
-            columnPlacement="center",
-            rowPlacement="top",
-            rowAlignment="firstBaseline",
-        )
-        self.window.getNSWindow().setViewsNeedDisplay_(True)
-
-    def show(self):
-        self.window.show()
-
-    @objc.python_method
-    def remove_row(self, sender=None):
-        del self.schema[sender.title]
-        self.rebuild_schema_grid()
-
-    @objc.python_method
-    def edit_options(self, sender=None):
-        pass
-
-    @objc.python_method
-    def rename(self, sender=None):
-        self.schema[sender.get()] = self.schema.pop(sender.old_title)
-        self.rebuild_schema_grid()
-
-    @objc.python_method
-    def add_row(self, sender=None):
-        self.schema["New Entry"] = Textbox()
-        self.rebuild_schema_grid()
-
-    @objc.python_method
-    def change_type(self, sender=None):
-        newtype = sender.get()
-        if newtype == "Checkbox":
-            self.schema[sender.title] = Checkbox()
-        elif newtype == "Glyphbox":
-            self.schema[sender.title] = Glyphbox()
-        elif newtype == "Textbox":
-            self.schema[sender.title] = Textbox()
-        elif newtype == "Dropdown":
-            self.schema[sender.title] = Dropdown()
-        self.rebuild_schema_grid()
-
-    @objc.python_method
-    def save(self, sender=None):
-        print("Save")
-        self.font.userData[OUR_KEY] = {
-            title: widget.serialize() for title, widget in self.schema.items()
-        }
-        self.other.schemaChanged()
-
 # The actual palette!
 
 class GlyphMetadataPalette(PalettePlugin):
@@ -271,6 +160,7 @@ class GlyphMetadataPalette(PalettePlugin):
         try:
 
             mainMenu = NSApplication.sharedApplication().mainMenu()
+            self.generation = 0
             self.name = Glyphs.localize({"en": u"Glyph Metadata"})
             self.width = 150
             self.margin = 5
@@ -337,7 +227,7 @@ class GlyphMetadataPalette(PalettePlugin):
             columnSpacing=5,
             columnPlacement="leading",
             rowPlacement="top",
-            rowAlignment="firstBaseline",
+            rowAlignment="lastBaseline",
         )
         self.height = 26 + 20 * (len(self.schema.keys()))
         self.paletteView.resize(self.width, self.height)
@@ -504,10 +394,121 @@ class GlyphMetadataPalette(PalettePlugin):
         except Exception as e:
             self.logError(traceback.format_exc())
 
-    @objc.python_method
+    def currentSchemaEditor(self):
+        if hasattr(self.paletteView, "schema_editor_window_%s" % self.generation):
+            return getattr(self.paletteView, "schema_editor_window_%s" % self.generation)
+
     def openSchemaEditor(self, sender=None):
-        if self.font:
-            SchemaEditor(self.font, self.schema, self).show()
+        if hasattr(self.paletteView, "schema_editor_window_%s" % self.generation):
+            # Just leak it. At least it doesn't crash.
+            pass
+        self.generation = self.generation + 1
+        schema_editor_window = vanilla.FloatingWindow(
+            (500, 500),
+            title="Metadata Schema Editor",
+        )
+        setattr(self.paletteView, "schema_editor_window_%s" % self.generation, schema_editor_window)
+        schema_editor_window.parent = self
+        schema_editor_window.new_schema = dict(self.schema)
+        self.rebuildSchemaEditor()
+
+        schema_editor_window.add_row = vanilla.Button(
+            (0, -20, 100, 20), "Add Row", callback=self.schemaEditorAddRow
+        )
+        schema_editor_window.save = vanilla.Button(
+            (120, -20, 100, 20), "Save", callback=self.schemaEditorSave
+        )
+        schema_editor_window.show()
+
+    @objc.python_method
+    def rebuildSchemaEditor(self):
+        schema_editor_window = self.currentSchemaEditor()
+        if hasattr(schema_editor_window, "schema_grid"):
+            while schema_editor_window.schema_grid.getRowCount() > 1:
+                schema_editor_window.schema_grid.showRow(1, False)
+                schema_editor_window.schema_grid.removeRow(1)
+        else:
+            schema_editor_window.schema_grid = vanilla.GridView(
+                        (0, 0, -0, -20),
+                        [[
+                vanilla.TextBox((0,0,100,26), "Name"),
+                vanilla.TextBox("auto", "Widget Type"),
+                vanilla.TextBox("auto", ""),
+                vanilla.TextBox("auto", "Remove"),
+            ]],
+                        columnPadding=(5, 5),
+                        columnSpacing=10,
+                        rowPadding=(2, 2),
+                        columnPlacement="center",
+                        rowPlacement="top",
+                        rowAlignment="lastBaseline",
+                    )
+        for title, widget in schema_editor_window.new_schema.items():
+            title_box = vanilla.EditText(
+                (0,0,100,26), title, callback=self.schemaEditorRenameRow, continuous=False
+            )
+            title_box.old_title = title
+            options = ["Dropdown", "Glyphbox", "Checkbox", "Textbox"]
+            type_box = vanilla.PopUpButton("auto", options, callback=self.schemaEditorChangeType)
+            type_box.title = title
+            type_box.setItem(widget.__class__.__name__)
+            if isinstance(widget, Dropdown):
+                edit_options_box = system_image_button(
+                    "NSActionTemplate", "Edit Options", self.schemaEditorEditOptions
+                )
+                edit_options_box.title = title
+            else:
+                edit_options_box = vanilla.TextBox("auto", "")
+            remove_box = system_image_button(
+                "NSRemoveTemplate", "Remove this row", self.schemaEditorRemoveRow
+            )
+            remove_box.title = title
+
+            row = [title_box, type_box, edit_options_box, remove_box]
+            schema_editor_window.schema_grid.appendRow(row)
+        schema_editor_window.getNSWindow().setViewsNeedDisplay_(True)
+
+    @objc.python_method
+    def schemaEditorRemoveRow(self, sender=None):
+        del self.currentSchemaEditor().new_schema[sender.title]
+        self.rebuildSchemaEditor()
+
+    @objc.python_method
+    def schemaEditorEditOptions(self, sender=None):
+        pass
+
+    @objc.python_method
+    def schemaEditorRenameRow(self, sender=None):
+        self.currentSchemaEditor().new_schema[sender.get()] = self.currentSchemaEditor().new_schema.pop(sender.old_title)
+        self.rebuildSchemaEditor()
+
+    @objc.python_method
+    def schemaEditorAddRow(self, sender=None):
+        print("Hello, %s" % sender)
+        self.currentSchemaEditor().new_schema["New Entry"] = Textbox()
+        self.rebuildSchemaEditor()
+
+    @objc.python_method
+    def schemaEditorChangeType(self, sender=None):
+        newtype = sender.get()
+        if newtype == "Checkbox":
+            self.currentSchemaEditor().new_schema[sender.title] = Checkbox()
+        elif newtype == "Glyphbox":
+            self.currentSchemaEditor().new_schema[sender.title] = Glyphbox()
+        elif newtype == "Textbox":
+            self.currentSchemaEditor().new_schema[sender.title] = Textbox()
+        elif newtype == "Dropdown":
+            self.currentSchemaEditor().new_schema[sender.title] = Dropdown()
+        self.rebuildSchemaEditor()
+
+    @objc.python_method
+    def schemaEditorSave(self, sender=None):
+        print("Save")
+        self.font.userData[OUR_KEY] = {
+            title: widget.serialize() for title, widget in self.new_schema.items()
+        }
+        self.schemaChanged()
+
 
     @objc.python_method
     def __file__(self):
