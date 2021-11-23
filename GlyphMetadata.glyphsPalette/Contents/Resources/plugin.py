@@ -3,10 +3,17 @@
 import objc
 from GlyphsApp import *
 import GlyphsApp
+import traceback
 from GlyphsApp.plugins import *
 import vanilla
 from collections import OrderedDict
-from AppKit import NSView, NSForegroundColorAttributeName, NSColor, NSAttributedString
+from AppKit import (
+    NSView,
+    NSForegroundColorAttributeName,
+    NSColor,
+    NSAttributedString,
+    NSApp,
+)
 
 OUR_KEY = "uk.co.corvelsoftware.GlyphMetadata"
 
@@ -186,7 +193,7 @@ class GlyphMetadataPalette(PalettePlugin):
             )
             self.paletteView.group = vanilla.Group((0, 0, 0, 0))
             self.paletteView.group.schema_editor = vanilla.Button(
-                (0, -25, 100, 20), "Edit schema", callback=self.openSchemaEditor
+                (5, -25, 100, 20), "Edit schema", callback=self.openSchemaEditor
             )
             self.buildInterfaceFromSchema()
             self.dialog = self.paletteView.group.getNSView()
@@ -412,7 +419,7 @@ class GlyphMetadataPalette(PalettePlugin):
             # Just leak it. At least it doesn't crash.
             pass
         self.generation = self.generation + 1
-        schema_editor_window = vanilla.FloatingWindow(
+        schema_editor_window = vanilla.Window(
             (500, 500), title="Metadata Schema Editor",
         )
         setattr(
@@ -423,10 +430,10 @@ class GlyphMetadataPalette(PalettePlugin):
         self.rebuildSchemaEditor("Initial setup")
 
         schema_editor_window.add_row = vanilla.Button(
-            (0, -23, 100, 20), "Add Row", callback=self.schemaEditorAddRow
+            (5, -32, 100, 20), "Add Row", callback=self.schemaEditorAddRow
         )
         schema_editor_window.save = vanilla.Button(
-            (120, -23, 100, 20), "Save", callback=self.schemaEditorSave
+            (120, -32, 100, 20), "Save", callback=self.schemaEditorSave
         )
         schema_editor_window.show()
 
@@ -447,7 +454,7 @@ class GlyphMetadataPalette(PalettePlugin):
                     gridView.removeRowAtIndex_(i)
             else:
                 schema_editor_window.schema_grid = vanilla.GridView(
-                    (0, 0, -0, -26),
+                    (5, 5, -5, -36),
                     [
                         [
                             vanilla.TextBox((0, 0, 100, 26), "Name"),
@@ -469,7 +476,7 @@ class GlyphMetadataPalette(PalettePlugin):
                     (0, 0, 100, 26),
                     title,
                     callback=self.schemaEditorRenameRow,
-                    continuous=False,
+                    continuous=True,
                 )
                 title_box.old_title = title
                 options = ["Dropdown", "Glyphbox", "Checkbox", "Textbox"]
@@ -504,7 +511,75 @@ class GlyphMetadataPalette(PalettePlugin):
 
     @objc.python_method
     def schemaEditorEditOptions(self, sender=None):
-        pass
+        try:
+            schema_editor_window = self.currentSchemaEditor()
+            widget = schema_editor_window.new_schema[sender.title]
+            if not hasattr(schema_editor_window, "edit_options_sheet"):
+                schema_editor_window.edit_options_sheet = vanilla.Sheet(
+                    (200, 250), schema_editor_window
+                )
+                assert schema_editor_window.edit_options_sheet.parentWindow
+
+            if not hasattr(schema_editor_window.edit_options_sheet, "list"):
+                schema_editor_window.edit_options_sheet.list = vanilla.List(
+                    (10, 10, -10, -41),
+                    ["Double click to edit", "Right click to add", "Delete to remove"],
+                    drawFocusRing=False,
+                    editCallback=lambda sender: (),
+                    enableDelete=True,
+                    menuCallback=self.optionsSheetAddRow,
+                )
+            if not hasattr(schema_editor_window.edit_options_sheet, "cancel"):
+                schema_editor_window.edit_options_sheet.cancel = vanilla.Button(
+                    (10, -36, 80, 20), "Cancel", callback=self.optionsSheetCancel,
+                )
+            if not hasattr(schema_editor_window.edit_options_sheet, "save"):
+                schema_editor_window.edit_options_sheet.save = vanilla.Button(
+                    (-90, -36, 80, 20), "Save", callback=self.optionsSheetSave
+                )
+
+            schema_editor_window.edit_options_sheet.widget_name = sender.title
+            if widget.options:
+                schema_editor_window.edit_options_sheet.list.set(widget.options)
+            # schema_editor_window.edit_options_sheet.show()
+
+            NSApp().beginSheet_modalForWindow_modalDelegate_didEndSelector_contextInfo_(
+                schema_editor_window.edit_options_sheet._window,
+                schema_editor_window._window,
+                None,
+                None,
+                0,
+            )
+        except Exception as e:
+            self.logError(traceback.format_exc())
+
+    @objc.python_method
+    def optionsSheetCancel(self, sender=None):
+        try:
+            schema_editor_window = self.currentSchemaEditor()
+            schema_editor_window.edit_options_sheet.close()
+            schema_editor_window.edit_options_sheet.retain()  # Avoid stupid double free
+            del schema_editor_window.edit_options_sheet
+        except Exception as e:
+            self.logError(traceback.format_exc())
+
+    @objc.python_method
+    def optionsSheetSave(self, sender=None):
+        try:
+            schema_editor_window = self.currentSchemaEditor()
+            widget = schema_editor_window.new_schema[
+                schema_editor_window.edit_options_sheet.widget_name
+            ]
+            widget.options = schema_editor_window.edit_options_sheet.list.get()
+            schema_editor_window.edit_options_sheet.close()
+            schema_editor_window.edit_options_sheet.retain()  # Avoid stupid double free
+            del schema_editor_window.edit_options_sheet
+        except Exception as e:
+            self.logError(traceback.format_exc())
+
+    @objc.python_method
+    def optionsSheetAddRow(self, sender=None):
+        sender.set(sender.get() + ["New option"])
 
     @objc.python_method
     def schemaEditorRenameRow(self, sender=None):
@@ -551,6 +626,8 @@ class GlyphMetadataPalette(PalettePlugin):
         print(serialized_schema)
         self.font.userData[OUR_KEY] = serialized_schema
         self.schemaChanged()
+        self.currentSchemaEditor().retain()  # Avoid stupid double free
+        self.currentSchemaEditor().close()
 
     @objc.python_method
     def __file__(self):
