@@ -13,6 +13,10 @@ from AppKit import (
     NSColor,
     NSAttributedString,
     NSApp,
+    NSLayoutConstraint,
+    NSLayoutAttributeHeight,
+    NSLayoutRelationEqual,
+    NSLayoutAttributeNotAnAttribute,
 )
 
 OUR_KEY = "uk.co.corvelsoftware.GlyphMetadata"
@@ -172,7 +176,7 @@ class GlyphMetadataPalette(PalettePlugin):
 
             mainMenu = NSApplication.sharedApplication().mainMenu()
             self.generation = 0
-            self.name = Glyphs.localize({"en": u"Glyph Metadata"})
+            self.name = Glyphs.localize({"en": "Glyph Metadata"})
             self.width = 150
             self.margin = 5
             self.font = None
@@ -185,18 +189,25 @@ class GlyphMetadataPalette(PalettePlugin):
                 self.font = Glyphs.font
             plist_schema = Glyphs.font.userData.get("OUR_KEY", [])
             self.buildSchemaFromPlist(plist_schema)
-            self.height = 52 + 20 * (1 + len(self.schema.keys()))
-            self.paletteView = vanilla.Window(
-                (self.width, self.height),
-                minSize=(self.width, self.height - 10),
-                maxSize=(self.width, self.height + 200),
-            )
+            self.height = 26 + 40 * (len(self.schema.keys()))
+            self.paletteView = vanilla.Window((self.width, self.height),)
             self.paletteView.group = vanilla.Group((0, 0, 0, 0))
             self.paletteView.group.schema_editor = vanilla.Button(
                 (5, -25, 100, 20), "Edit schema", callback=self.openSchemaEditor
             )
             self.buildInterfaceFromSchema()
+            self.heightConstraint = NSLayoutConstraint.constraintWithItem_attribute_relatedBy_toItem_attribute_multiplier_constant_(
+                self.paletteView.group.getNSView(),
+                NSLayoutAttributeHeight,
+                NSLayoutRelationEqual,
+                None,
+                NSLayoutAttributeNotAnAttribute,
+                1,
+                self.height,
+            )
             self.dialog = self.paletteView.group.getNSView()
+            self.dialog.setTranslatesAutoresizingMaskIntoConstraints_(False)
+            self.dialog.addConstraints_([self.heightConstraint])
         except Exception as e:
             self.logError(traceback.format_exc())
 
@@ -220,6 +231,7 @@ class GlyphMetadataPalette(PalettePlugin):
 
         if not self.schema:
             return
+
         # print("Building interface")
         self.grid_data = []
         self.titles = {}
@@ -228,7 +240,7 @@ class GlyphMetadataPalette(PalettePlugin):
             value_box = role.make_control(self)
             # role.refresh(self)
             go_box = role.associated_button(title, self)
-            title_box = vanilla.TextBox("auto", title)
+            title_box = vanilla.TextBox((0, 0, 60, 45), title)
             self.fields[title] = value_box
             self.titles[title] = title_box
             self.grid_data.append([title_box, value_box, go_box])
@@ -237,14 +249,15 @@ class GlyphMetadataPalette(PalettePlugin):
             (self.margin, self.margin, -self.margin, -self.margin - 30),
             self.grid_data,
             columnPadding=(2, 2),
-            rowPadding=(2, 2),
             rowSpacing=5,
             columnSpacing=5,
             columnPlacement="leading",
             rowPlacement="top",
             rowAlignment="lastBaseline",
         )
-        self.height = 26 + 20 * (len(self.schema.keys()))
+        self.height = 26 + 28 * (len(self.schema.keys()))
+        self.heightConstraint.setConstant_(self.height)
+        self.paletteView.group.resize(self.width, self.height)
         self.paletteView.resize(self.width, self.height)
 
     @objc.python_method
@@ -405,7 +418,7 @@ class GlyphMetadataPalette(PalettePlugin):
             data = self.selectedGlyph.userData.get(OUR_KEY, {})
             for key, obj in self.fields.items():
                 data[key] = obj.get()
-                self.titles[key].set(key)
+                # self.titles[key].set(key)
             self.selectedGlyph.userData[OUR_KEY] = data
         except Exception as e:
             self.logError(traceback.format_exc())
@@ -476,7 +489,7 @@ class GlyphMetadataPalette(PalettePlugin):
                     (0, 0, 100, 26),
                     title,
                     callback=self.schemaEditorRenameRow,
-                    continuous=True,
+                    continuous=False,
                 )
                 title_box.old_title = title
                 options = ["Dropdown", "Glyphbox", "Checkbox", "Textbox"]
@@ -597,8 +610,13 @@ class GlyphMetadataPalette(PalettePlugin):
 
     @objc.python_method
     def schemaEditorAddRow(self, sender=None):
-        print("Hello, %s" % sender)
-        self.currentSchemaEditor().new_schema["New Entry"] = Textbox()
+        if "New Entry" not in self.currentSchemaEditor().new_schema:
+            self.currentSchemaEditor().new_schema["New Entry"] = Textbox()
+        else:
+            counter = 1
+            while f"New Entry {counter}" in self.currentSchemaEditor().new_schema:
+                counter = counter + 1
+            self.currentSchemaEditor().new_schema[f"New Entry {counter}"] = Textbox()
         self.rebuildSchemaEditor("Added row")
 
     @objc.python_method
